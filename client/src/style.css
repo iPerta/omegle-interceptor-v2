@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --color-oled-black: #000000;
+  --color-oled-dark: #121212;
+  --color-oled-card: #1a1a1a;
+  --color-oled-text: #e0e0e0;
+  --color-oled-accent: #00ff41;
+  --color-oled-disconnect: #ff0033;
+}
+
+body {
+    background-color: var(--color-oled-black);
+    color: white;
+    overflow: hidden;
+    font-family: 'Inter', sans-serif;
+}
