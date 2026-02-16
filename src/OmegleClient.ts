@@ -72,7 +72,7 @@ export class OmegleClient extends EventEmitter {
                 this.heartbeatInterval = setInterval(() => {
                     this.sendPacket({ channel: 'heartbeat', data: { timestamp: Date.now() } });
                 }, 30000);
-                
+
                 resolve();
             });
 
@@ -99,7 +99,7 @@ export class OmegleClient extends EventEmitter {
     }
 
     private handlePacket(packet: OmegleWebSocketPacket) {
-        // console.log(`[OmegleClient] Received packet:`, JSON.stringify(packet, null, 2));
+        console.log(`[OmegleClient] Received packet:`, JSON.stringify(packet, null, 2));
         this.emit('packet', packet);
 
         switch (packet.channel) {
@@ -133,6 +133,10 @@ export class OmegleClient extends EventEmitter {
                     sender: 'stranger',
                     timestamp: Date.now()
                 });
+                break;
+            case 'disconnect':
+                this.log('Stranger disconnected');
+                this.disconnect();
                 break;
         }
     }

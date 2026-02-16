@@ -11,6 +11,7 @@ app.use(cors());
 const server = http.createServer(app);
 
 let currentCookie = "";
+let relayEnabled = true;
 const browserManager = new BrowserManager();
 
 const io = new Server(server, {
@@ -75,21 +76,28 @@ const setupClientEvents = (state: ClientState) => {
             // Apply transformations
             let text = msg.text;
             if (state.genderInversion) {
-                 text = text.replace(/(?<![a-zA-Z])([mf])(?![a-zA-Z])/gi, (match) => {
-                        if (match.toLowerCase() === 'm') return match === 'M' ? 'F' : 'f';
-                        return match === 'F' ? 'M' : 'm';
-                    });
+                text = text.replace(/(?<![a-zA-Z])([mf])(?![a-zA-Z])/gi, (match) => {
+                    if (match.toLowerCase() === 'm') return match === 'M' ? 'F' : 'f';
+                    return match === 'F' ? 'M' : 'm';
+                });
             }
             if (state.numberOffset !== 0) {
-                 text = text.replace(/-?\d+/g, (match) => {
-                        return (parseInt(match) + state.numberOffset).toString();
-                    });
+                text = text.replace(/-?\d+/g, (match) => {
+                    return (parseInt(match) + state.numberOffset).toString();
+                });
             }
 
             emitLog(id, 'stranger', text);
-            
-            // Relay Logic (if applicable - for now just log/broadcast)
-            // Ideally we'd have a 'partner' ID logic here for 1-to-1 relay
+
+            // Relay to partner client
+            if (relayEnabled) {
+                const partnerId = id === 1 ? 2 : 1;
+                const partner = clients.get(partnerId);
+                if (partner && partner.status === 'connected') {
+                    partner.client.sendMessage(text);
+                    emitLog(partnerId, 'you', text);
+                }
+            }
         }
     });
     client.on('error', (err) => {
@@ -111,8 +119,6 @@ const emitLog = (id: number, sender: 'you' | 'stranger' | 'sys', text: string) =
     if (state) {
         state.log.push({ sender, text });
         io.emit('message', { id, sender, text });
-        
-        // Auto-relay logic could go here if we link clients
     }
 };
 
@@ -134,52 +140,37 @@ io.on('connection', (socket: Socket) => {
     socket.on('action', async ({ clientId, action }: { clientId: number, action: string }) => {
         const state = getClientState(clientId);
         if (action === 'connect') {
-             if (state.status === 'disconnected') {
-                 // Reset client instance to ensure fresh start
-                 // Generate 16 digit randid
-                 const randid = Array.from({length: 16}, () => Math.floor(Math.random() * 10)).join('');
-                 
-                 // Combine currentCookie (from browser) with new randid
-                 // If currentCookie is empty, connection might fail, but client can retry after opening browser.
-                 let finalCookie = currentCookie;
-                 if (!finalCookie.includes('randid=')) {
-                     finalCookie = `${finalCookie}; randid=${randid};`;
-                 }
-                 
-                 const newClient = new OmegleClient({ 
-                    debug: true, 
-                    cookie: finalCookie 
-                 });
-                 state.client = newClient;
-                 setupClientEvents(state);
+            if (state.status === 'disconnected') {
+                // Reset client instance to ensure fresh start
+                // Generate 16 digit randid
+                const randid = Array.from({ length: 16 }, () => Math.floor(Math.random() * 10)).join('');
 
-                 try {
-                     await state.client.init(); // Init if needed
-                     await state.client.connect();
-                     await state.client.startMatching();
-                 } catch (e) {
-                     console.error(e);
-                     emitLog(clientId, 'sys', 'Failed to connect');
-                     updateStatus(clientId, 'disconnected');
-                 }
-             }
+                // Combine currentCookie (from browser) with new randid
+                // If currentCookie is empty, connection might fail, but client can retry after opening browser.
+                let finalCookie = currentCookie;
+                if (!finalCookie.includes('randid=')) {
+                    finalCookie = `${finalCookie}; randid=${randid};`;
+                }
+
+                const newClient = new OmegleClient({
+                    debug: true,
+                    cookie: finalCookie
+                });
+                state.client = newClient;
+                setupClientEvents(state);
+
+                try {
+                    await state.client.init(); // Init if needed
+                    await state.client.connect();
+                    await state.client.startMatching();
+                } catch (e) {
+                    console.error(e);
+                    emitLog(clientId, 'sys', 'Failed to connect');
+                    updateStatus(clientId, 'disconnected');
+                }
+            }
         } else if (action === 'disconnect') {
             await state.client.disconnect();
-        } else if (action === 'open-browser') {
-            emitLog(clientId, 'sys', 'Opening browser to retrieve cookies...');
-            try {
-                await browserManager.launch();
-                const cookies = await browserManager.waitForCookies();
-                if (cookies) {
-                    currentCookie = cookies;
-                    console.log("Cookies retrieved:", currentCookie);
-                    emitLog(clientId, 'sys', 'Cookies retrieved successfully! You can now connect.');
-                }
-                await browserManager.close();
-            } catch (err) {
-                 console.error("Browser Error:", err);
-                 emitLog(clientId, 'sys', 'Browser Error: ' + (err as Error).message);
-            }
         }
     });
 
@@ -187,6 +178,29 @@ io.on('connection', (socket: Socket) => {
         const state = getClientState(clientId);
         state.genderInversion = gender;
         state.numberOffset = offset;
+    });
+
+    socket.on('relay', (enabled: boolean) => {
+        relayEnabled = enabled;
+        io.emit('relay', relayEnabled);
+        console.log(`Relay ${relayEnabled ? 'enabled' : 'disabled'}`);
+    });
+
+    socket.on('open-browser', async () => {
+        io.emit('cookie-status', 'retrieving');
+        try {
+            await browserManager.launch();
+            const cookies = await browserManager.waitForCookies();
+            if (cookies) {
+                currentCookie = cookies;
+                console.log("Cookies retrieved:", currentCookie);
+                io.emit('cookie-status', 'ready');
+            }
+            await browserManager.close();
+        } catch (err) {
+            console.error("Browser Error:", err);
+            io.emit('cookie-status', 'error');
+        }
     });
 
     socket.on('message', async ({ clientId, text }: { clientId: number, text: string }) => {
@@ -199,10 +213,10 @@ io.on('connection', (socket: Socket) => {
 
     socket.on('broadcast', async ({ text }: { text: string }) => {
         clients.forEach(async (state) => {
-             if (state.status === 'connected') {
-                 await state.client.sendMessage(text);
-                 emitLog(state.id, 'you', `[Broadcast] ${text}`);
-             }
+            if (state.status === 'connected') {
+                await state.client.sendMessage(text);
+                emitLog(state.id, 'you', `[Broadcast] ${text}`);
+            }
         });
     });
 });

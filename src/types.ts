@@ -120,7 +120,13 @@ export type OmegleWebSocketPacket =
     | PeerCountryPacket
     | UserStatusPacket
     | TypingPacket
-    | IncomingMessagePacket;
+    | IncomingMessagePacket
+    | DisconnectPacket;
+
+export interface DisconnectPacket {
+    channel: 'disconnect';
+    data: any;
+}
 
 export interface OmegleEvents {
     'ready': () => void;
